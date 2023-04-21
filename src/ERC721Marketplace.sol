@@ -4,9 +4,10 @@ pragma solidity 0.8.19;
 import "openzeppelin-contracts/contracts/token/ERC721/IERC721.sol";
 import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import "openzeppelin-contracts-upgradeable/contracts/access/OwnableUpgradeable.sol";
-import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import "chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 import "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import "openzeppelin-contracts/contracts/security/ReentrancyGuard.sol";
+import "forge-std/console.sol";
 
 //  * @title Multi-Currency NFT Marketplace with Auction Support
 //  *
@@ -63,7 +64,7 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
     error NonERC20();
     error CurrencyAlreadyAllowed();
     error CurrencyNotAvailable();
-    error TooLongTerm();
+    error TooLongTerm(uint256 actualTerm);
     error ItemAlreadyOnListing();
     error SenderIsNotItemOwner();
     error SenderIsItemOwner();
@@ -158,11 +159,8 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
         if (IERC20(tokenAddress).totalSupply() == 0) {
             revert NonERC20();
         }
-        allowedCurrencies[tokenAddress] = Currency(
-            IERC20(tokenAddress),
-            AggregatorV3Interface(priceFeedAddress),
-            decimals
-        );
+        allowedCurrencies[tokenAddress] =
+            Currency(IERC20(tokenAddress), AggregatorV3Interface(priceFeedAddress), decimals);
         emit CurrencyAdded(tokenAddress, priceFeedAddress);
     }
 
@@ -189,8 +187,10 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
         uint256 auctionEndTime,
         uint256 minBid,
         address currency
-    ) external {
-        if (auctionEndTime > MAX_TERM) revert TooLongTerm();
+    )
+        external
+    {
+        if (auctionEndTime > MAX_TERM) revert TooLongTerm(auctionEndTime);
         if (minBid == 0) revert ZeroBid();
         if (currency == address(0)) revert ZeroAddress();
         if (allowedCurrencies[currency].token == IERC20(address(0))) revert CurrencyNotAvailable();
@@ -204,7 +204,7 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
     /// @param price The price of the NFT
     /// @param deadline The deadline of the listing
     function createPurchaseListing(address nftAddress, uint256 tokenId, uint256 price, uint256 deadline) external {
-        if (deadline > MAX_TERM) revert TooLongTerm();
+        if (deadline > MAX_TERM) revert TooLongTerm(deadline);
         if (price == 0) revert ZeroPrice();
 
         _createListing(nftAddress, tokenId, price, deadline, false, 0, 0, USDT);
@@ -224,17 +224,18 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
             currencyAmount = getCurrencyAmount(listing.price, currencyAddress);
             if (msg.value < currencyAmount) revert InsufficientEtherSent(msg.value);
         } else {
-            if (allowedCurrencies[currencyAddress].priceFeed == AggregatorV3Interface(address(0)))
+            if (allowedCurrencies[currencyAddress].priceFeed == AggregatorV3Interface(address(0))) {
                 revert CurrencyNotAvailable();
+            }
             currencyAmount = getCurrencyAmount(listing.price, currencyAddress);
             allowedCurrencies[currencyAddress].token.safeTransferFrom(msg.sender, listing.seller, currencyAmount);
         }
 
         uint256 feeAmount = (currencyAmount * treasuryPercentage) / (PERCENT_DIVIDER);
         if (listing.currency == ETH) {
-            (bool successTreasury, ) = payable(treasury).call{value: feeAmount}("");
+            (bool successTreasury,) = payable(treasury).call{ value: feeAmount }("");
             if (!successTreasury) revert FailedToSendEther();
-            (bool successSeller, ) = payable(listing.seller).call{value: currencyAmount - feeAmount}("");
+            (bool successSeller,) = payable(listing.seller).call{ value: currencyAmount - feeAmount }("");
             if (!successSeller) revert FailedToSendEther();
         } else {
             allowedCurrencies[listing.currency].token.safeTransferFrom(listing.seller, treasury, feeAmount);
@@ -288,7 +289,7 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
     function updateDeadline(uint256 listingId, uint256 deadline) external listingExists(listingId) {
         Listing storage listing = listings[listingId];
         if (listing.seller != msg.sender) revert SenderIsNotItemOwner();
-        if (deadline > MAX_TERM) revert TooLongTerm();
+        if (deadline > MAX_TERM) revert TooLongTerm(deadline);
         listing.deadline = deadline + block.timestamp;
         emit DeadlineUpdated(listingId, deadline);
     }
@@ -306,10 +307,7 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
     /// @dev Allows a user to finalize an auction
     /// @param listingId The ID of the listing
     /// @param winner The address of the winner
-    function finalizeAuction(
-        uint256 listingId,
-        address winner
-    ) external nonReentrant listingExists(listingId) {
+    function finalizeAuction(uint256 listingId, address winner) external nonReentrant listingExists(listingId) {
         Listing storage listing = listings[listingId];
         if (!listing.isAuction) revert NonAuction();
         if (block.timestamp <= listing.auctionEndTime) revert AuctionNotOver();
@@ -319,9 +317,9 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
         uint256 winningBid = listing.bids[winner];
         uint256 feeAmount = (winningBid * (treasuryPercentage)) / (PERCENT_DIVIDER);
         if (listing.currency == ETH) {
-            (bool successTreasury, ) = payable(treasury).call{value: feeAmount}("");
+            (bool successTreasury,) = payable(treasury).call{ value: feeAmount }("");
             if (!successTreasury) revert FailedToSendEther();
-            (bool successSeller, ) = payable(listing.seller).call{value: winningBid - feeAmount}("");
+            (bool successSeller,) = payable(listing.seller).call{ value: winningBid - feeAmount }("");
             if (!successSeller) revert FailedToSendEther();
         } else {
             allowedCurrencies[listing.currency].token.safeTransfer(treasury, feeAmount);
@@ -354,7 +352,9 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
         uint256 auctionEndTime,
         uint256 minBid,
         address currency
-    ) internal {
+    )
+        internal
+    {
         if (listings[nextListingId].seller != address(0)) revert ItemAlreadyOnListing();
         if (IERC721(nftAddress).ownerOf(tokenId) != msg.sender) revert SenderIsNotItemOwner();
         if (!IERC721(nftAddress).isApprovedForAll(msg.sender, address(this))) revert NonApprovedNFT();
@@ -382,7 +382,7 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
     /// @param currencyAddress The address of the ERC20 token
     /// @return The amount of currency
     function getCurrencyAmount(uint256 usdtAmount, address currencyAddress) public view returns (uint256) {
-        (, int256 price, , , ) = allowedCurrencies[currencyAddress].priceFeed.latestRoundData();
+        (, int256 price,,,) = allowedCurrencies[currencyAddress].priceFeed.latestRoundData();
         uint256 decimalAdjustment = 10 ** uint256(allowedCurrencies[currencyAddress].decimals);
         return (usdtAmount * (uint256(price))) / decimalAdjustment;
     }
@@ -392,7 +392,7 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
     /// @param currencyAddress The address of the ERC20 token
     /// @return The amount of USDT
     function getUsdAmount(uint256 currencyAmount, address currencyAddress) public view returns (uint256) {
-        (, int256 price, , , ) = allowedCurrencies[currencyAddress].priceFeed.latestRoundData();
+        (, int256 price,,,) = allowedCurrencies[currencyAddress].priceFeed.latestRoundData();
         uint256 decimalAdjustment = 10 ** uint256(allowedCurrencies[currencyAddress].decimals);
         return (currencyAmount * decimalAdjustment) / (uint256(price));
     }
@@ -416,15 +416,18 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
     function getListingBidAmount(
         uint256 listingId,
         address bidder
-    ) external view listingExists(listingId) returns (uint256) {
+    )
+        external
+        view
+        listingExists(listingId)
+        returns (uint256)
+    {
         return listings[listingId].bids[bidder];
     }
 
     /// @dev Returns the listing details
     /// @param listingId The ID of the listing
-    function getListing(
-        uint256 listingId
-    )
+    function getListing(uint256 listingId)
         external
         view
         returns (
