@@ -145,6 +145,7 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
     /// @param _weth The address of the WETH
     function setEth(address _weth) external onlyOwner {
         if (_weth == address(0)) revert ZeroAddress();
+        if (IERC20(_weth).totalSupply() == 0) revert NonERC20();
         ETH = _weth;
         emit EthSetted(_weth);
     }
@@ -300,6 +301,7 @@ contract ERC721Marketplace is OwnableUpgradeable, ReentrancyGuard {
     function updatePrice(uint256 listingId, uint256 price) external listingExists(listingId) {
         Listing storage listing = listings[listingId];
         if (listing.seller != msg.sender) revert SenderIsNotItemOwner();
+        if (price == 0) revert ZeroPrice();
         listing.price = price;
         emit PriceUpdated(listingId, price);
     }
